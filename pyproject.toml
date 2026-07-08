@@ -1,0 +1,133 @@
+# edgefm-eqc — Efficient Qwen Competition reproduction (single unified venv).
+#
+# Historically this repo used FIVE mutually-incompatible venvs. They are now
+# unified into ONE, resolvable environment. The key facts that make a single
+# venv possible (verified with `uv pip install --dry-run` against each stage's
+# real, installed versions — NOT the upstream pyproject defaults):
+#
+#   * vllm 0.22.1   requires  transformers (!=5.0..5.4, !=5.5.0, >=4.56), torch==2.11.0
+#   * modelopt 0.44 requires  transformers ~5.5.x  (caps the upper bound)
+#   * DFlash train (SpecForge, HF backend, NO sglang) ran on torch 2.11 / tf 5.10.2
+#   * lm-eval 0.4.11 (eval harness, HTTP client) has no torch/transformers pin
+#
+#   => the intersection: torch 2.11.0+cu130 / transformers 5.5.x / triton 3.6 /
+#      vllm 0.22.1 / modelopt 0.44 satisfies EVERY stage at once.
+#
+# The transformers upper bound (<5.6) comes ONLY from modelopt (QAD packing /
+# training). If you never re-quantize or re-train QAD, drop the `qad` extra and
+# relax `transformers` to `>=5.6` for the newer runtime line.
+#
+# sglang is intentionally EXCLUDED: it hard-pins transformers==4.57.1 which
+# conflicts with Qwen3.5 (needs 5.x). SpecForge trains on its `hf` backend, so
+# sglang is not needed — install SpecForge itself with `--no-deps` (see README).
+#
+# Setup:
+#   uv sync                 # runtime only (serve + data-gen + eval + DFlash-eval)
+#   uv sync --all-extras    # + QAD training/packing + DFlash (SpecForge) training
+#   uv pip install -e src/SpecForge --no-deps   # SpecForge training framework (no sglang)
+
+[project]
+name = "edgefm-eqc"
+version = "0.1.0"
+description = "Efficient Qwen Competition reproduction: QAD INT4 + DFlash speculative decoding on Qwen3.5-4B."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = "Apache-2.0"
+authors = [
+    { name = "Jaeyeon Kim", email = "jaeyeon.kim@nota.ai" },
+    { name = "Bo-Kyeong Kim", email = "bokyeong.kim@nota.ai" },
+    { name = "Jewon Lee", email = "je1lee.research@gmail.com" },
+]
+
+dependencies = [
+    # --- torch stack (cu130 wheels; see [tool.uv.sources]) ---
+    "torch==2.11.0",
+    "torchvision==0.26.0",
+    "torchaudio==2.11.0",
+
+    # --- inference runtime (serving + data-gen + DFlash spec-decode eval) ---
+    "vllm==0.22.1",
+    # Upper bound is modelopt's; !=5.5.0 is vllm's. See header note.
+    "transformers>=5.5.1,<5.6",
+    "compressed-tensors==0.15.0.1",
+    "flashinfer-python",
+
+    # --- serving proxy (src/serving/: FastAPI -> spawns `vllm serve`) ---
+    "fastapi",
+    "uvicorn[standard]",
+    "httpx",
+    "pyyaml",
+
+    # --- data generation (src/data_generator/) ---
+    "openai",
+    "pyarrow",
+    "huggingface-hub",
+
+    # --- eval harness (src/eval_harness/: quality gates over HTTP) ---
+    # Gates are mmlu_pro / ifeval / gpqa_diamond only — none use math-verify, so
+    # the grader's `[math]` extra is dropped: its antlr4-runtime==4.11 pin clashes
+    # with modelopt->omegaconf's antlr4-runtime==4.9.*, and it changes no scores
+    # for these three tasks. Add `math` back only if you score a math task.
+    "lm-eval[api,ifeval]==0.4.11",
+    "datasets",
+    "accelerate",
+
+    # --- common utilities used across scripts ---
+    "numpy",
+    "tqdm",
+    "safetensors",
+
+    # --- in-repo editable packages (see [tool.uv.sources]) ---
+    "dflash",           # ./src/dflash_runtime — DFlash `method: dflash` for vllm spec-decode
+    "eqc-vllm-plugin",  # ./src/vllm_plugin — W4A16 draft load + SWA plugin
+]
+
+[project.urls]
+Repository = "https://github.com/nota-github/edgefm-eqc-final"
+
+[project.optional-dependencies]
+# Quantization-Aware Distillation: training + compressed-tensors packing (src/qad/).
+# modelopt 0.44 is what caps transformers to <5.6 (see header).
+qad = [
+    "nvidia-modelopt[hf]>=0.44",
+    "onnx>=1.16",
+    "onnxruntime>=1.18",
+    "bitsandbytes>=0.43",
+    "flash-linear-attention",  # GatedDeltaNet kernels for Qwen3.5
+    "causal-conv1d",           # causal conv kernels for Qwen3.5
+    "deepspeed>=0.15",         # ZeRO-2 for seq-16384 full-vocab logits
+    "wandb",
+]
+
+# DFlash drafter training (src/SpecForge/, `hf` target backend, NO sglang).
+# SpecForge itself is installed separately: `uv pip install -e src/SpecForge --no-deps`.
+train = [
+    "yunchang",
+    "tensorboard",
+    "pydantic",
+    "psutil",
+    "ninja",
+    "packaging",
+    "wandb",
+]
+
+# This repo root is a collection of loose scripts/dirs, not an importable
+# package — tell uv not to try to build/install the root itself.
+[tool.uv]
+package = false
+# CUDA-only repo: resolve/lock for Linux only. vllm/deepspeed/bitsandbytes/triton
+# ship no macOS wheels, so a universal lock would fail on the darwin split.
+environments = ["sys_platform == 'linux'"]
+
+# --- uv: local editable packages + PyTorch cu130 index ------------------------
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+torchvision = { index = "pytorch-cu130" }
+torchaudio = { index = "pytorch-cu130" }
+dflash = { path = "src/dflash_runtime", editable = true }
+eqc-vllm-plugin = { path = "src/vllm_plugin", editable = true }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true

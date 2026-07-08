@@ -1,0 +1,15 @@
+# Serving config for the QAD target (quality-gate serve, no spec-decode).
+# model: compressed-tensors pack produced by src/qad/pack_bf16_to_ct.py from the
+# chosen QAD checkpoint (final pipeline = ckpt5000).
+name: qad_nemotron_regen_ckpt5000
+engine: vllm
+model: runs/qad_nemotron_regen/local_model_ct_ckpt5000
+quant: compressed-tensors
+trust_remote_code: true
+tokenizer: Qwen/Qwen3.5-4B
+vllm_args:
+  max_model_len: 16384
+  enforce_eager: false
+  max_num_seqs: 8
+  dtype: auto
+  quantization: compressed-tensors

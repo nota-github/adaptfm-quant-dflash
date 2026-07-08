@@ -1,0 +1,18 @@
+[project]
+name = "eqc-vllm-plugin"
+version = "0.0.1"
+description = "vLLM general plugin: enable W4A16-quantized DFlash drafter loading + execution on vLLM 0.21."
+requires-python = ">=3.10"
+
+# vLLM discovers general plugins via this entry-point group and loads them
+# in EVERY process (API server, EngineCore, spawned workers). register() is
+# a no-op unless EQC_DFLASH_QUANT_PATCH=1, so installing it is harmless.
+[project.entry-points."vllm.general_plugins"]
+eqc_dflash_quant = "eqc_vllm_plugin:register"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["eqc_vllm_plugin"]

@@ -1,0 +1,44 @@
+# QAD on the nemotron-regen corpus — SMOKE config (50 steps).
+#   - dataset: qwen3_5_nemotron_combined_regen.jsonl (220K rows, `conversations` key)
+#   - max_seq_len: 16384, lr 2e-6
+# After a smoke pass, use src/configs/train_config.yaml for the full 8000-step run.
+
+teacher_model: Qwen/Qwen3.5-4B
+student_init:  Qwen/Qwen3.5-4B
+cyankiwi_path: cyankiwi/Qwen3.5-4B-AWQ-4bit   # HF id (or a local dir with the AWQ-4bit weights)
+seed: 42
+
+wandb_project:  edgefm-eqc-qad   # set null to disable wandb (stdout+JSONL only)
+wandb_run_name: null
+
+optimizer:    bnb.optim.AdamW8bit
+lr:           2.0e-6
+weight_decay: 0.0
+betas:        [0.9, 0.95]
+eps:          1.0e-8
+grad_clip:    1.0
+
+lr_schedule:  cosine
+warmup_ratio: 0.03
+epochs:       10
+max_steps:    50          # SMOKE — swap to train_config_full.yaml for the 8000-step run
+
+max_seq_len:       16384
+micro_batch_size:  1
+grad_accum_steps:  16
+
+kl_temperature: 1.0
+mtp_alpha:      0.0
+mixed_precision:    bf16
+grad_checkpointing: true
+
+calib_size: 8
+
+eval_strategy:    "no"
+eval_steps:       200
+save_strategy:    steps
+save_steps:       50
+keep_last_ckpts:  0
+log_every_steps:  5
+
+inject_kl_tolerance: 0.005

@@ -1,0 +1,81 @@
+# Data & models
+data/
+models/
+# ...but keep the vendored SpecForge source package `specforge/data` — the bare
+# `data/` pattern above matches at any depth and was silently excluding it from
+# commits, breaking `from specforge.data import ...` on fresh clones.
+!src/SpecForge/specforge/data/
+!src/SpecForge/specforge/data/**
+# generated prompt/response sets (220K/400K) — large
+src/data_generator/*.jsonl
+
+# External competition-rules tree (not part of this repo)
+reference/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv*/
+venv/
+env/
+ENV/
+
+# Generated run artifacts (checkpoints, packed data, locks, logs)
+runs/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Caches
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs & temp
+*.log
+*.tmp
+wandb/
+
+# Environment / secrets
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# MAL source docs frozen from LongBench-v2 (copyrighted book text)
+src/SpecForge/mal_sources/
+
+# Realistic latency prompts sliced from LongBench-v2 (copyrighted; regenerate
+# via src/eval_harness/prepare_longbench_latency.py)
+src/eval_harness/latency_prompts_longbench.json
+
+# SWA latency sweep scratch artifacts (result JSON + serve/harness logs; numbers
+# live in 9_latency_measurement.md)
+.swa_sweep*/
+
+# MAL/LongBench eval artifacts (regenerable; numbers live in the *.md reports)
+src/SpecForge/*logs*/
+src/SpecForge/sweep_full_perdoc/
+src/SpecForge/mal_results*.jsonl
+src/SpecForge/perdoc*.jsonl
+src/SpecForge/mal_curve*.png
+
+# vendored src/dflash_runtime: keep code, ignore dataset cache + build/egg artifacts
+src/dflash_runtime/cache/
+src/dflash_runtime/*.egg-info/
+src/dflash_runtime/**/__pycache__/

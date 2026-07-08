@@ -1,0 +1,25 @@
+# Latency serve config (final) — QAD ckpt5000 target + GPTQ-W4A16 DFlash draft.
+# Serve under the unified .venv (vllm 0.22.1) with the eqc_vllm_plugin enabled:
+#   EQC_DFLASH_QUANT_PATCH=1     # W4A16 quantized-draft loading (required)
+#   EQC_DFLASH_SWA_WINDOW=1024   # drafter sliding-window attention (final: 1024)
+# Single-GPU + A10G mem cap. Draft path = output of scripts/quant_dflash_gptq.sh.
+name: dflash_gptq
+engine: vllm
+model: runs/qad_nemotron_regen/local_model_ct_ckpt5000
+quant: compressed-tensors
+trust_remote_code: true
+tokenizer: Qwen/Qwen3.5-4B
+speculative_config:
+  method: dflash
+  model: runs/drafter_quant/dflash_w4_gptq
+  num_speculative_tokens: 15
+  quantization: compressed-tensors
+vllm_args:
+  max_model_len: 8704
+  enforce_eager: false
+  max_num_seqs: 1
+  dtype: auto
+  attention_backend: FLASH_ATTN
+  language_model_only: true
+  block_size: 32
+  max_num_batched_tokens: 16384

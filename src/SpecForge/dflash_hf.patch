@@ -1,0 +1,179 @@
+diff --git a/scripts/train_dflash.py b/scripts/train_dflash.py
+index d899d95..1eff764 100755
+--- a/scripts/train_dflash.py
++++ b/scripts/train_dflash.py
+@@ -449,6 +449,10 @@ def main():
+     print_on_rank0(f"Total training steps: {total_steps}")
+ 
+     print_on_rank0("Loading target embeddings and head...")
++    # NOTE: upstream references `device_type` here but only defines it inside
++    # build_target_and_draft_models(); recompute it in main() from the local device.
++    device = get_local_device()
++    device_type = device.type
+     target_components = TargetEmbeddingsAndHead.from_pretrained(
+         args.target_model_path,
+         embed_key=args.embedding_key,
+diff --git a/specforge/args.py b/specforge/args.py
+index 2cd5efc..8a54d7f 100644
+--- a/specforge/args.py
++++ b/specforge/args.py
+@@ -2,7 +2,14 @@ import argparse
+ from dataclasses import dataclass
+ from typing import Any, Dict, List
+ 
+-from sglang.srt.server_args import ATTENTION_BACKEND_CHOICES
++try:
++    # sglang is only needed for the sglang target backend. Keep the import
++    # optional so hf-backend training works without sglang installed (sglang
++    # hard-pins transformers==4.57.1, which is incompatible with newer target
++    # models such as Qwen3.5 that require transformers>=5.x).
++    from sglang.srt.server_args import ATTENTION_BACKEND_CHOICES
++except ImportError:
++    ATTENTION_BACKEND_CHOICES = None  # argparse: no choices restriction
+ 
+ 
+ @dataclass
+diff --git a/specforge/modeling/__init__.py b/specforge/modeling/__init__.py
+index 09999d6..948e89c 100644
+--- a/specforge/modeling/__init__.py
++++ b/specforge/modeling/__init__.py
+@@ -1,12 +1,21 @@
+ # from .auto import AutoDistributedTargetModel, AutoDraftModelConfig, AutoEagle3DraftModel
+ from .auto import AutoDraftModelConfig, AutoEagle3DraftModel
+ from .draft.llama3_eagle import LlamaForCausalLMEagle3
+-from .target.eagle3_target_model import (
+-    CustomEagle3TargetModel,
+-    HFEagle3TargetModel,
+-    SGLangEagle3TargetModel,
+-    get_eagle3_target_model,
+-)
++try:
++    # Optional: eagle3 target backend is sglang-coupled. Allow import without
++    # sglang for the dflash hf path (sglang pins transformers==4.57.1, which is
++    # incompatible with newer targets such as Qwen3.5 needing transformers>=5.x).
++    from .target.eagle3_target_model import (
++        CustomEagle3TargetModel,
++        HFEagle3TargetModel,
++        SGLangEagle3TargetModel,
++        get_eagle3_target_model,
++    )
++except ImportError:
++    CustomEagle3TargetModel = None
++    HFEagle3TargetModel = None
++    SGLangEagle3TargetModel = None
++    get_eagle3_target_model = None
+ 
+ __all__ = [
+     "LlamaForCausalLMEagle3",
+diff --git a/specforge/modeling/target/__init__.py b/specforge/modeling/target/__init__.py
+index 0f70b3b..58ac475 100644
+--- a/specforge/modeling/target/__init__.py
++++ b/specforge/modeling/target/__init__.py
+@@ -1,10 +1,21 @@
+-from .eagle3_target_model import (
+-    CustomEagle3TargetModel,
+-    Eagle3TargetModel,
+-    HFEagle3TargetModel,
+-    SGLangEagle3TargetModel,
+-    get_eagle3_target_model,
+-)
++try:
++    # eagle3_target_model is heavily coupled to sglang. Keep it optional so the
++    # dflash hf backend (which does not need it) can be imported without sglang
++    # installed. sglang hard-pins transformers==4.57.1, incompatible with newer
++    # target models (e.g. Qwen3.5) that require transformers>=5.x.
++    from .eagle3_target_model import (
++        CustomEagle3TargetModel,
++        Eagle3TargetModel,
++        HFEagle3TargetModel,
++        SGLangEagle3TargetModel,
++        get_eagle3_target_model,
++    )
++except ImportError:
++    CustomEagle3TargetModel = None
++    Eagle3TargetModel = None
++    HFEagle3TargetModel = None
++    SGLangEagle3TargetModel = None
++    get_eagle3_target_model = None
+ from .target_head import TargetHead
+ 
+ __all__ = [
+diff --git a/specforge/modeling/target/dflash_target_model.py b/specforge/modeling/target/dflash_target_model.py
+index 0df9382..4309d43 100644
+--- a/specforge/modeling/target/dflash_target_model.py
++++ b/specforge/modeling/target/dflash_target_model.py
+@@ -5,21 +5,14 @@ from typing import List, Optional
+ import torch
+ import torch.distributed as dist
+ import torch.nn as nn
+-from sglang.srt.configs.model_config import ModelConfig
+-from sglang.srt.managers.schedule_batch import Req, ScheduleBatch
+-from sglang.srt.managers.scheduler import Scheduler
+-from sglang.srt.mem_cache.cache_init_params import CacheInitParams
+-from sglang.srt.mem_cache.radix_cache import RadixCache
+-from sglang.srt.model_executor.forward_batch_info import CaptureHiddenMode, ForwardBatch
+-from sglang.srt.sampling.sampling_params import SamplingParams
+-from sglang.srt.server_args import ServerArgs
+-from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
+-from sglang.srt.utils import require_mlp_sync, require_mlp_tp_gather
+ from transformers import AutoModelForCausalLM
+ 
+ from specforge.distributed import get_tp_group
+ 
+-from .sglang_backend import SGLangRunner
++# NOTE: sglang imports are deferred into the SGLang backend methods below so
++# that the hf target backend can be used without sglang installed. sglang
++# hard-pins transformers==4.57.1, which conflicts with target models that
++# require transformers>=5.x (e.g. Qwen3.5).
+ 
+ 
+ @dataclass
+@@ -65,7 +58,7 @@ class DFlashTargetModel(ABC):
+ 
+ 
+ class SGLangDFlashTargetModel(DFlashTargetModel):
+-    def __init__(self, model_runner: SGLangRunner):
++    def __init__(self, model_runner: "SGLangRunner"):
+         super().__init__()
+         self.model_runner = model_runner
+ 
+@@ -79,6 +72,11 @@ class SGLangDFlashTargetModel(DFlashTargetModel):
+         trust_remote_code: bool = False,
+         **kwargs,
+     ) -> "SGLangDFlashTargetModel":
++        from sglang.srt.configs.model_config import ModelConfig
++        from sglang.srt.server_args import ServerArgs
++
++        from .sglang_backend import SGLangRunner
++
+         tp_size = dist.get_world_size(get_tp_group())
+         server_args = ServerArgs(
+             model_path=pretrained_model_name_or_path,
+@@ -118,6 +116,17 @@ class SGLangDFlashTargetModel(DFlashTargetModel):
+ 
+     @torch.no_grad
+     def _extend(self, reqs):
++        from sglang.srt.managers.schedule_batch import ScheduleBatch
++        from sglang.srt.managers.scheduler import Scheduler
++        from sglang.srt.mem_cache.cache_init_params import CacheInitParams
++        from sglang.srt.mem_cache.radix_cache import RadixCache
++        from sglang.srt.model_executor.forward_batch_info import (
++            CaptureHiddenMode,
++            ForwardBatch,
++        )
++        from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
++        from sglang.srt.utils import require_mlp_sync, require_mlp_tp_gather
++
+         cache_params = CacheInitParams(
+             disable=False,
+             req_to_token_pool=self.model_runner.req_to_token_pool,
+@@ -187,6 +196,9 @@ class SGLangDFlashTargetModel(DFlashTargetModel):
+         attention_mask: torch.Tensor,
+         loss_mask: torch.Tensor,
+     ) -> DFlashTargetOutput:
++        from sglang.srt.managers.schedule_batch import Req
++        from sglang.srt.sampling.sampling_params import SamplingParams
++
+         sampling_params = SamplingParams(temperature=0, max_new_tokens=1)
+         reqs, data_cache = [], []
+ 
